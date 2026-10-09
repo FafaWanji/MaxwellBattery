@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 
 namespace MaxwellBattery;
 
@@ -8,8 +9,7 @@ static class Program
     const int MaxCrashes = 5;
     static readonly TimeSpan CrashWindow = TimeSpan.FromMinutes(10);
 
-    static readonly string LogPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MaxwellBattery", "crash.log");
+    static string Version => typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "?";
 
     [STAThread]
     static int Main(string[] args)
@@ -53,7 +53,15 @@ static class Program
 
             if (code == 0) return 0;
 
-            Log($"Tray process exited with code {code}, restarting");
+            // The child writes pending-crash itself when it catches an exception.
+            if (!File.Exists(Settings.PendingCrashPath))
+            {
+                string summary = $"Process exited with code {code} (no exception captured, likely killed)";
+                Log(summary);
+                WritePendingCrash(summary);
+            }
+            Log("Restarting tray process");
+
             crashes.Enqueue(DateTime.Now);
             while (crashes.Count > 0 && DateTime.Now - crashes.Peek() > CrashWindow) crashes.Dequeue();
             if (crashes.Count >= MaxCrashes)
@@ -71,7 +79,12 @@ static class Program
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
         {
-            Log($"Unhandled exception: {e.ExceptionObject}");
+            var ex = e.ExceptionObject as Exception;
+            string summary = ex == null ? "Unknown error" : Summarize(ex);
+            Log($"CRASH v{Version}: {summary}{Environment.NewLine}" +
+                $"  Last battery: {TrayContext.LastStatus}{Environment.NewLine}" +
+                $"  {e.ExceptionObject}");
+            WritePendingCrash(summary);
             Environment.Exit(1);
         };
 
@@ -80,12 +93,34 @@ static class Program
         return 0;
     }
 
+    /// <summary>"InvalidOperationException in TrayContext.Poll: message"</summary>
+    static string Summarize(Exception ex)
+    {
+        // WinForms rethrows UI-thread exceptions wrapped; report the real one.
+        while (ex is System.Reflection.TargetInvocationException or AggregateException && ex.InnerException != null)
+            ex = ex.InnerException;
+
+        var frame = Regex.Match(ex.StackTrace ?? "", @"at MaxwellBattery\.([\w.]+)\(");
+        string where = frame.Success ? $" in {frame.Groups[1].Value}" : "";
+        return $"{ex.GetType().Name}{where}: {ex.Message}";
+    }
+
+    static void WritePendingCrash(string summary)
+    {
+        try
+        {
+            Directory.CreateDirectory(Settings.Dir);
+            File.WriteAllText(Settings.PendingCrashPath, summary);
+        }
+        catch { }
+    }
+
     static void Log(string message)
     {
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
-            File.AppendAllText(LogPath, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {message}{Environment.NewLine}");
+            Directory.CreateDirectory(Settings.Dir);
+            File.AppendAllText(Settings.CrashLogPath, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {message}{Environment.NewLine}");
         }
         catch { }
     }

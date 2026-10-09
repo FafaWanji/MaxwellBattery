@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
 using System.Runtime.InteropServices;
@@ -19,6 +20,9 @@ sealed class TrayContext : ApplicationContext
     bool _busy;
     bool _lowWarned;
 
+    /// <summary>Last tooltip text, included in crash logs.</summary>
+    public static string LastStatus { get; private set; } = "not read yet";
+
     public TrayContext()
     {
         _autostart = new ToolStripMenuItem("Start with Windows", null, (_, _) => ToggleAutostart())
@@ -29,17 +33,51 @@ sealed class TrayContext : ApplicationContext
         var menu = new ContextMenuStrip();
         menu.Items.Add("Refresh", null, (_, _) => Poll());
         menu.Items.Add(_autostart);
+        if (Settings.DevMode)
+        {
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("Dev: Open crash log", null, (_, _) => OpenCrashLog());
+            menu.Items.Add("Dev: Simulate crash", null, (_, _) => throw new InvalidOperationException("Simulated crash from dev menu"));
+        }
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Exit", null, (_, _) => ExitThread());
 
         _tray = new NotifyIcon { ContextMenuStrip = menu, Visible = true };
         _tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) Poll(); };
+        _tray.BalloonTipClicked += (_, _) => { if (_crashBalloon) OpenCrashLog(); };
+        _tray.BalloonTipClosed += (_, _) => _crashBalloon = false;
         Show("…", Color.Gray, "Audeze Maxwell: reading…");
+        ReportPendingCrash();
 
         _timer = new System.Windows.Forms.Timer { Interval = PollMs };
         _timer.Tick += (_, _) => Poll();
         _timer.Start();
         Poll();
+    }
+
+    bool _crashBalloon;
+
+    /// <summary>Shows the crash that caused the previous restart (dev mode only).</summary>
+    void ReportPendingCrash()
+    {
+        string summary;
+        try
+        {
+            if (!File.Exists(Settings.PendingCrashPath)) return;
+            summary = File.ReadAllText(Settings.PendingCrashPath).Trim();
+            File.Delete(Settings.PendingCrashPath);
+        }
+        catch { return; }
+
+        if (!Settings.DevMode) return;
+        _crashBalloon = true;
+        _tray.ShowBalloonTip(10000, "MaxwellBattery crashed and restarted", summary + "\nClick to open crash log.", ToolTipIcon.Error);
+    }
+
+    static void OpenCrashLog()
+    {
+        if (File.Exists(Settings.CrashLogPath))
+            Process.Start(new ProcessStartInfo("notepad.exe", $"\"{Settings.CrashLogPath}\""));
     }
 
     async void Poll()
@@ -87,6 +125,7 @@ sealed class TrayContext : ApplicationContext
         _currentIcon = RenderIcon(text, color);
         _tray.Icon = _currentIcon;
         _tray.Text = tooltip;
+        LastStatus = tooltip;
         if (old != null) { DestroyIcon(old.Handle); old.Dispose(); }
     }
 
