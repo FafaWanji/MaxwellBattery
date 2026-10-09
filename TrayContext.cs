@@ -1,0 +1,150 @@
+using System.Drawing.Drawing2D;
+using System.Drawing.Text;
+using System.Runtime.InteropServices;
+using Microsoft.Win32;
+
+namespace MaxwellBattery;
+
+sealed class TrayContext : ApplicationContext
+{
+    const int PollMs = 60_000;
+    const int LowBattery = 15;
+    const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    const string RunName = "MaxwellBattery";
+
+    readonly NotifyIcon _tray;
+    readonly System.Windows.Forms.Timer _timer;
+    readonly ToolStripMenuItem _autostart;
+    Icon? _currentIcon;
+    bool _busy;
+    bool _lowWarned;
+
+    public TrayContext()
+    {
+        _autostart = new ToolStripMenuItem("Start with Windows", null, (_, _) => ToggleAutostart())
+        {
+            Checked = IsAutostartEnabled(),
+        };
+
+        var menu = new ContextMenuStrip();
+        menu.Items.Add("Refresh", null, (_, _) => Poll());
+        menu.Items.Add(_autostart);
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Exit", null, (_, _) => ExitThread());
+
+        _tray = new NotifyIcon { ContextMenuStrip = menu, Visible = true };
+        _tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) Poll(); };
+        Show("…", Color.Gray, "Audeze Maxwell: reading…");
+
+        _timer = new System.Windows.Forms.Timer { Interval = PollMs };
+        _timer.Tick += (_, _) => Poll();
+        _timer.Start();
+        Poll();
+    }
+
+    async void Poll()
+    {
+        if (_busy) return;
+        _busy = true;
+        try
+        {
+            var (state, pct) = await Task.Run(() =>
+            {
+                try { return MaxwellHid.ReadBattery(); }
+                catch { return (MaxwellHid.State.HeadsetOff, -1); }
+            });
+
+            switch (state)
+            {
+                case MaxwellHid.State.NoDongle:
+                    Show("–", Color.Gray, "Audeze Maxwell: dongle not connected");
+                    break;
+                case MaxwellHid.State.HeadsetOff:
+                    Show("–", Color.Gray, "Audeze Maxwell: headset off");
+                    break;
+                default:
+                    Show(pct.ToString(), ColorFor(pct), $"Audeze Maxwell: {pct}%");
+                    if (pct <= LowBattery && !_lowWarned)
+                    {
+                        _tray.ShowBalloonTip(5000, "Audeze Maxwell", $"Battery low: {pct}%", ToolTipIcon.Warning);
+                        _lowWarned = true;
+                    }
+                    else if (pct > LowBattery + 5) _lowWarned = false;
+                    break;
+            }
+        }
+        finally { _busy = false; }
+    }
+
+    static Color ColorFor(int pct) =>
+        pct > 50 ? Color.FromArgb(80, 220, 100) :
+        pct > 20 ? Color.FromArgb(255, 200, 40) :
+                   Color.FromArgb(255, 70, 70);
+
+    void Show(string text, Color color, string tooltip)
+    {
+        var old = _currentIcon;
+        _currentIcon = RenderIcon(text, color);
+        _tray.Icon = _currentIcon;
+        _tray.Text = tooltip;
+        if (old != null) { DestroyIcon(old.Handle); old.Dispose(); }
+    }
+
+    static Icon RenderIcon(string text, Color color)
+    {
+        int size = SystemInformation.SmallIconSize.Width;
+        using var bmp = new Bitmap(size, size);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.Clear(Color.Transparent);
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+
+            // Shrink font until the text fits the icon width.
+            float fontSize = size * (text.Length >= 3 ? 0.55f : 0.75f);
+            Font font;
+            SizeF measured;
+            while (true)
+            {
+                font = new Font("Segoe UI", fontSize, FontStyle.Bold, GraphicsUnit.Pixel);
+                measured = g.MeasureString(text, font, PointF.Empty, StringFormat.GenericTypographic);
+                if (measured.Width <= size || fontSize <= 6) break;
+                font.Dispose();
+                fontSize -= 0.5f;
+            }
+
+            using (font)
+            using (var brush = new SolidBrush(color))
+            {
+                float x = (size - measured.Width) / 2f;
+                float y = (size - measured.Height) / 2f;
+                g.DrawString(text, font, brush, x, y, StringFormat.GenericTypographic);
+            }
+        }
+        return Icon.FromHandle(bmp.GetHicon());
+    }
+
+    static bool IsAutostartEnabled()
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(RunKey);
+        return key?.GetValue(RunName) is string;
+    }
+
+    void ToggleAutostart()
+    {
+        using var key = Registry.CurrentUser.CreateSubKey(RunKey);
+        if (IsAutostartEnabled()) key.DeleteValue(RunName, false);
+        else key.SetValue(RunName, $"\"{Environment.ProcessPath}\"");
+        _autostart.Checked = IsAutostartEnabled();
+    }
+
+    protected override void ExitThreadCore()
+    {
+        _timer.Stop();
+        _tray.Visible = false;
+        _tray.Dispose();
+        base.ExitThreadCore();
+    }
+
+    [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr handle);
+}
