@@ -5,7 +5,7 @@ namespace MaxwellBattery;
 
 /// <summary>
 /// Reads the battery level of an Audeze Maxwell over its vendor HID interface
-/// (usage page 0xFF13). Protocol taken from HeadsetControl's audeze_maxwell.hpp.
+/// (usage page 0xFF13). Request bytes taken from HeadsetControl's audeze_maxwell.hpp.
 /// </summary>
 public static class MaxwellHid
 {
@@ -32,7 +32,7 @@ public static class MaxwellHid
         new byte[] { 0x06, 0x07, 0x80, 0x05, 0x5A, 0x03, 0x00, 0xD6, 0x0C },
     };
 
-    static readonly byte[] BatteryRequest = { 0x06, 0x08, 0x80, 0x05, 0x5A, 0x04, 0x00, 0x01, 0x09, 0x22 };
+    static readonly byte[] BatteryRequest = { 0x06, 0x07, 0x80, 0x05, 0x5A, 0x03, 0x00, 0xD6, 0x0C };
 
     /// <summary>Result of a battery query.</summary>
     public enum State { NoDongle, HeadsetOff, Ok }
@@ -50,30 +50,71 @@ public static class MaxwellHid
         var (inLen, outLen) = GetReportLengths(h);
         log?.Invoke($"Report lengths: in={inLen} out={outLen}");
 
-        foreach (var req in InitRequests)
-            Exchange(h, req, inLen, outLen);
-
-        byte[] resp = Exchange(h, BatteryRequest, inLen, outLen);
-        log?.Invoke("Battery response: " + BitConverter.ToString(resp));
-
-        if (resp[0] == 0x00) return (State.HeadsetOff, -1);
-        for (int i = 0; i < resp.Length - 4; i++)
+        Drain(h, inLen);
+        int pct = RequestBattery(h, inLen, outLen, log);
+        if (pct < 0)
         {
-            if (resp[i] == 0xD6 && resp[i + 1] == 0x0C && resp[i + 2] == 0x00 && resp[i + 3] == 0x00)
-                return (State.Ok, resp[i + 4]);
+            // No answer: the dongle may need the Audeze HQ init sequence first.
+            log?.Invoke("No reply, sending init sequence");
+            foreach (var req in InitRequests[..^1])
+                Exchange(h, req, inLen, outLen);
+            Drain(h, inLen);
+            pct = RequestBattery(h, inLen, outLen, log);
         }
-        return (State.HeadsetOff, -1);
+        return pct < 0 ? (State.HeadsetOff, -1) : (State.Ok, pct);
+    }
+
+    /// <summary>
+    /// Sends the battery request and polls input reports for the reply.
+    /// Replies arrive asynchronously; byte 1 of each input report is the number of
+    /// new bytes after the 0x80 header at index 2 (0 = nothing new, buffer is stale).
+    /// The battery frame is 05 5D 05 00 D6 0C 00 00 [percent].
+    /// </summary>
+    static int RequestBattery(SafeFileHandle h, int inLen, int outLen, Action<string>? log)
+    {
+        Write(h, BatteryRequest, outLen);
+        for (int attempt = 0; attempt < 20; attempt++)
+        {
+            Thread.Sleep(DelayMs);
+            byte[] r = Read(h, inLen);
+            int end = Math.Min(3 + r[1], r.Length);
+            if (r[1] == 0) continue;
+            log?.Invoke($"read {attempt}: {BitConverter.ToString(r, 0, end)}");
+            for (int i = 3; i + 8 < end; i++)
+            {
+                if (r[i] == 0x05 && r[i + 1] == 0x5D && r[i + 2] == 0x05 && r[i + 3] == 0x00
+                    && r[i + 4] == 0xD6 && r[i + 5] == 0x0C && r[i + 6] == 0x00 && r[i + 7] == 0x00
+                    && r[i + 8] <= 100)
+                    return r[i + 8];
+            }
+        }
+        return -1;
+    }
+
+    /// <summary>Discards queued replies from earlier requests.</summary>
+    static void Drain(SafeFileHandle h, int inLen)
+    {
+        for (int i = 0; i < 10 && Read(h, inLen)[1] != 0; i++)
+            Thread.Sleep(10);
     }
 
     static byte[] Exchange(SafeFileHandle h, byte[] request, int inLen, int outLen)
     {
         Thread.Sleep(DelayMs);
+        Write(h, request, outLen);
+        return Read(h, inLen);
+    }
 
+    static void Write(SafeFileHandle h, byte[] request, int outLen)
+    {
         var outBuf = new byte[Math.Max(outLen, MsgSize)];
         Array.Copy(request, outBuf, request.Length);
         if (!WriteFile(h, outBuf, (uint)outLen, out _, IntPtr.Zero))
             throw new IOException($"WriteFile failed: {Marshal.GetLastWin32Error()}");
+    }
 
+    static byte[] Read(SafeFileHandle h, int inLen)
+    {
         var inBuf = new byte[Math.Max(inLen, MsgSize)];
         inBuf[0] = 0x07;
         if (!HidD_GetInputReport(h, inBuf, (uint)inLen))
