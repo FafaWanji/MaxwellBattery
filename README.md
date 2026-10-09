@@ -7,6 +7,7 @@ A tiny Windows tray app that shows the battery level of the **Audeze Maxwell** h
 - Tooltip with the exact value, left-click to refresh, updates every 60 s
 - Low-battery notification at 15 %
 - Optional "Start with Windows" (right-click menu)
+- Restarts itself automatically after a crash (crash log: `%LOCALAPPDATA%\MaxwellBattery\crash.log`)
 - No Audeze HQ required
 
 ## Supported connections
