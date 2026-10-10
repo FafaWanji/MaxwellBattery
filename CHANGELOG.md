@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.2] - 2026-10-10
+
+### Fixed
+- "Start with Windows" did not start the app at login. Windows skips startup entries that are not marked enabled in its startup-app list (Task Manager > Startup apps). The app now marks itself enabled, and the menu checkmark follows the Task Manager toggle.
+
+### Added
+- Dev mode: create `%LOCALAPPDATA%\MaxwellBattery\settings.json` with `{ "devMode": true }` to get a notification after a crash (exception and method, click to open the log) plus "Open crash log" and "Simulate crash" menu items.
+- Crash log entries now include version, a one-line summary and the last battery state.
+
 ## [1.0.1] - 2026-10-09
 
 ### Fixed
@@ -16,5 +25,6 @@
 - First release: tray icon showing the Audeze Maxwell battery percentage, colour-coded, with tooltip, low-battery notification at 15 % and "Start with Windows" option.
 - Works with the wireless dongle (`3329:4B18`) and USB-C cable (`3329:4B1E`).
 
+[1.0.2]: https://github.com/FafaWanji/MaxwellBattery/releases/tag/v1.0.2
 [1.0.1]: https://github.com/FafaWanji/MaxwellBattery/releases/tag/v1.0.1
 [1.0.0]: https://github.com/FafaWanji/MaxwellBattery/releases/tag/v1.0.0
