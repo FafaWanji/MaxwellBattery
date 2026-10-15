@@ -49,8 +49,17 @@ sealed class TrayContext : ApplicationContext
         _timer = new System.Windows.Forms.Timer { Interval = PollMs };
         _timer.Tick += (_, _) => Poll();
         _timer.Start();
+
+        // USB plug/unplug: re-read shortly after, once the device has settled.
+        _usbSettle = new System.Windows.Forms.Timer { Interval = 1500 };
+        _usbSettle.Tick += (_, _) => { _usbSettle.Stop(); Poll(); };
+        _deviceWatcher = new DeviceChangeWindow(() => { _usbSettle.Stop(); _usbSettle.Start(); });
+
         Poll();
     }
+
+    readonly System.Windows.Forms.Timer _usbSettle;
+    readonly DeviceChangeWindow _deviceWatcher;
 
     bool _crashBalloon;
 
@@ -83,23 +92,30 @@ sealed class TrayContext : ApplicationContext
         _busy = true;
         try
         {
-            var (state, pct) = await Task.Run(() =>
+            var (state, pct, cable) = await Task.Run(() =>
             {
-                try { return MaxwellHid.ReadBattery(); }
-                catch { return (MaxwellHid.State.HeadsetOff, -1); }
+                bool cable = false;
+                try { cable = MaxwellHid.IsCableConnected(); } catch { }
+                try { var (st, p) = MaxwellHid.ReadBattery(); return (st, p, cable); }
+                catch { return (MaxwellHid.State.HeadsetOff, -1, cable); }
             });
+
+            bool full = cable && pct >= 100;
+            bool charging = cable && !full;
+            string suffix = charging ? " (charging)" : full ? " (full, plugged in)" : "";
 
             switch (state)
             {
                 case MaxwellHid.State.NoDongle:
-                    Show("–", Color.Gray, "Audeze Maxwell: dongle not connected");
+                    Show("–", Color.Gray, "Audeze Maxwell: dongle not connected", false);
                     break;
                 case MaxwellHid.State.HeadsetOff:
-                    Show("–", Color.Gray, "Audeze Maxwell: headset off");
+                    Show("–", Color.Gray, $"Audeze Maxwell: headset off{suffix}", charging);
                     break;
                 default:
-                    Show(pct.ToString(), ColorFor(pct), $"Audeze Maxwell: {pct}%");
-                    if (pct <= LowBattery && !_lowWarned)
+                    Show(pct.ToString(), ColorFor(pct), $"Audeze Maxwell: {pct}%{suffix}", charging);
+                    if (charging) _lowWarned = false;
+                    else if (pct <= LowBattery && !_lowWarned)
                     {
                         _tray.ShowBalloonTip(5000, "Audeze Maxwell", $"Battery low: {pct}%", ToolTipIcon.Warning);
                         _lowWarned = true;
@@ -116,17 +132,17 @@ sealed class TrayContext : ApplicationContext
         pct > 20 ? Color.FromArgb(255, 200, 40) :
                    Color.FromArgb(255, 70, 70);
 
-    void Show(string text, Color color, string tooltip)
+    void Show(string text, Color color, string tooltip, bool charging = false)
     {
         var old = _currentIcon;
-        _currentIcon = RenderIcon(text, color);
+        _currentIcon = RenderIcon(text, color, charging);
         _tray.Icon = _currentIcon;
         _tray.Text = tooltip;
         LastStatus = tooltip;
         if (old != null) { DestroyIcon(old.Handle); old.Dispose(); }
     }
 
-    static Icon RenderIcon(string text, Color color)
+    static Icon RenderIcon(string text, Color color, bool charging)
     {
         int size = SystemInformation.SmallIconSize.Width;
         using var bmp = new Bitmap(size, size);
@@ -136,7 +152,10 @@ sealed class TrayContext : ApplicationContext
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
 
-            // Shrink font until the text fits the icon width.
+            // While charging, a lightning bolt takes the right third of the icon.
+            float textWidth = charging ? size * 0.68f : size;
+
+            // Shrink font until the text fits.
             float fontSize = size * (text.Length >= 3 ? 0.55f : 0.75f);
             Font font;
             SizeF measured;
@@ -144,7 +163,7 @@ sealed class TrayContext : ApplicationContext
             {
                 font = new Font("Segoe UI", fontSize, FontStyle.Bold, GraphicsUnit.Pixel);
                 measured = g.MeasureString(text, font, PointF.Empty, StringFormat.GenericTypographic);
-                if (measured.Width <= size || fontSize <= 6) break;
+                if (measured.Width <= textWidth || fontSize <= 6) break;
                 font.Dispose();
                 fontSize -= 0.5f;
             }
@@ -152,12 +171,42 @@ sealed class TrayContext : ApplicationContext
             using (font)
             using (var brush = new SolidBrush(color))
             {
-                float x = (size - measured.Width) / 2f;
+                float x = (textWidth - measured.Width) / 2f;
                 float y = (size - measured.Height) / 2f;
                 g.DrawString(text, font, brush, x, y, StringFormat.GenericTypographic);
             }
+
+            if (charging) DrawBolt(g, size);
         }
         return Icon.FromHandle(bmp.GetHicon());
+    }
+
+    static void DrawBolt(Graphics g, int size)
+    {
+        float s = size, left = s * 0.64f, w = s * 0.36f;
+        PointF P(float fx, float fy) => new(left + fx * w, fy * s);
+        var bolt = new[] { P(0.65f, 0.02f), P(0.05f, 0.56f), P(0.45f, 0.56f), P(0.30f, 0.98f), P(0.95f, 0.40f), P(0.55f, 0.40f) };
+        using var fill = new SolidBrush(Color.FromArgb(255, 220, 40));
+        g.FillPolygon(fill, bolt);
+    }
+
+    /// <summary>Hidden top-level window that receives WM_DEVICECHANGE broadcasts.</summary>
+    sealed class DeviceChangeWindow : NativeWindow
+    {
+        const int WM_DEVICECHANGE = 0x0219;
+        readonly Action _onChange;
+
+        public DeviceChangeWindow(Action onChange)
+        {
+            _onChange = onChange;
+            CreateHandle(new CreateParams());
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == WM_DEVICECHANGE) _onChange();
+            base.WndProc(ref m);
+        }
     }
 
     void ToggleAutostart()
@@ -170,6 +219,8 @@ sealed class TrayContext : ApplicationContext
     protected override void ExitThreadCore()
     {
         _timer.Stop();
+        _usbSettle.Stop();
+        _deviceWatcher.DestroyHandle();
         _tray.Visible = false;
         _tray.Dispose();
         base.ExitThreadCore();

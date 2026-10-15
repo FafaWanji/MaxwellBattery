@@ -10,6 +10,7 @@ namespace MaxwellBattery;
 public static class MaxwellHid
 {
     const ushort AudezeVid = 0x3329;
+    const ushort CablePid = 0x4B1E;
     const ushort VendorUsagePage = 0xFF13;
     const int MsgSize = 62;
     const int DelayMs = 60;
@@ -122,29 +123,44 @@ public static class MaxwellHid
         return inBuf;
     }
 
+    /// <summary>
+    /// True when the headset is connected to this PC by USB-C cable. It then shows up
+    /// as its own USB device (PID 0x4B1E) next to the dongle, which means it is charging.
+    /// </summary>
+    public static bool IsCableConnected() =>
+        AudezeHidPaths().Any(p => p.Contains("pid_" + CablePid.ToString("x4"), StringComparison.OrdinalIgnoreCase));
+
     static string? FindDevicePath()
     {
+        foreach (string path in AudezeHidPaths())
+        {
+            using var h = CreateFile(path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
+            if (h.IsInvalid) continue;
+
+            var attrs = new HIDD_ATTRIBUTES { Size = Marshal.SizeOf<HIDD_ATTRIBUTES>() };
+            if (!HidD_GetAttributes(h, ref attrs) || attrs.VendorID != AudezeVid) continue;
+            if (GetUsagePage(h) == VendorUsagePage) return path;
+        }
+        return null;
+    }
+
+    static List<string> AudezeHidPaths()
+    {
+        var paths = new List<string>();
         HidD_GetHidGuid(out Guid hidGuid);
         IntPtr devInfo = SetupDiGetClassDevs(ref hidGuid, IntPtr.Zero, IntPtr.Zero, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
-        if (devInfo == new IntPtr(-1)) return null;
+        if (devInfo == new IntPtr(-1)) return paths;
         try
         {
             var ifData = new SP_DEVICE_INTERFACE_DATA { cbSize = Marshal.SizeOf<SP_DEVICE_INTERFACE_DATA>() };
             for (uint i = 0; SetupDiEnumDeviceInterfaces(devInfo, IntPtr.Zero, ref hidGuid, i, ref ifData); i++)
             {
                 string? path = GetInterfacePath(devInfo, ref ifData);
-                if (path == null || !path.Contains("vid_3329", StringComparison.OrdinalIgnoreCase)) continue;
-
-                using var h = CreateFile(path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
-                if (h.IsInvalid) continue;
-
-                var attrs = new HIDD_ATTRIBUTES { Size = Marshal.SizeOf<HIDD_ATTRIBUTES>() };
-                if (!HidD_GetAttributes(h, ref attrs) || attrs.VendorID != AudezeVid) continue;
-                if (GetUsagePage(h) == VendorUsagePage) return path;
+                if (path != null && path.Contains("vid_3329", StringComparison.OrdinalIgnoreCase)) paths.Add(path);
             }
         }
         finally { SetupDiDestroyDeviceInfoList(devInfo); }
-        return null;
+        return paths;
     }
 
     static unsafe string? GetInterfacePath(IntPtr devInfo, ref SP_DEVICE_INTERFACE_DATA ifData)
