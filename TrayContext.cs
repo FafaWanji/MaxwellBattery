@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
 using System.Runtime.InteropServices;
-using Microsoft.Win32;
 
 namespace MaxwellBattery;
 
@@ -10,9 +9,6 @@ sealed class TrayContext : ApplicationContext
 {
     const int PollMs = 60_000;
     const int LowBattery = 15;
-    const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
-    const string RunName = "MaxwellBattery";
-    const string StartupApprovedKey = @"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
 
     readonly NotifyIcon _tray;
     readonly System.Windows.Forms.Timer _timer;
@@ -28,7 +24,7 @@ sealed class TrayContext : ApplicationContext
     {
         _autostart = new ToolStripMenuItem("Start with Windows", null, (_, _) => ToggleAutostart())
         {
-            Checked = IsAutostartEnabled(),
+            Checked = Autostart.IsEnabled(),
         };
 
         var menu = new ContextMenuStrip();
@@ -164,31 +160,11 @@ sealed class TrayContext : ApplicationContext
         return Icon.FromHandle(bmp.GetHicon());
     }
 
-    static bool IsAutostartEnabled()
-    {
-        using var key = Registry.CurrentUser.OpenSubKey(RunKey);
-        if (key?.GetValue(RunName) is not string) return false;
-
-        // Task Manager's startup toggle: first byte 2 = enabled, 3 = disabled.
-        using var approved = Registry.CurrentUser.OpenSubKey(StartupApprovedKey);
-        return approved?.GetValue(RunName) is not byte[] flags || flags.Length == 0 || flags[0] == 2;
-    }
-
     void ToggleAutostart()
     {
-        bool enable = !IsAutostartEnabled();
-        using (var key = Registry.CurrentUser.CreateSubKey(RunKey))
-        {
-            if (enable) key.SetValue(RunName, $"\"{Environment.ProcessPath}\"");
-            else key.DeleteValue(RunName, false);
-        }
-        // Without an explicit "enabled" entry here, Windows may skip the Run entry at login.
-        using (var approved = Registry.CurrentUser.CreateSubKey(StartupApprovedKey))
-        {
-            if (enable) approved.SetValue(RunName, new byte[] { 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, RegistryValueKind.Binary);
-            else approved.DeleteValue(RunName, false);
-        }
-        _autostart.Checked = IsAutostartEnabled();
+        if (Autostart.IsEnabled()) Autostart.Disable();
+        else Autostart.Enable();
+        _autostart.Checked = Autostart.IsEnabled();
     }
 
     protected override void ExitThreadCore()

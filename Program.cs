@@ -7,6 +7,7 @@ static class Program
 {
     const string ChildArg = "--child";
     const int MaxCrashes = 5;
+    const int SessionEndExitCode = 0x40010004;
     static readonly TimeSpan CrashWindow = TimeSpan.FromMinutes(10);
 
     static string Version => typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "?";
@@ -30,6 +31,9 @@ static class Program
 
         using var mutex = new Mutex(true, "MaxwellBattery.SingleInstance", out bool first);
         if (!first) return 0;
+
+        try { Autostart.Migrate(); }
+        catch (Exception ex) { Log($"Autostart migration failed: {ex.Message}"); }
         return Supervise();
     }
 
@@ -52,6 +56,8 @@ static class Program
             catch (Exception ex) { Log($"Failed to start tray process: {ex}"); code = -1; }
 
             if (code == 0) return 0;
+            // Windows ends processes with DBG_TERMINATE_PROCESS at logoff/shutdown; not a crash.
+            if (code == SessionEndExitCode) return 0;
 
             // The child writes pending-crash itself when it catches an exception.
             if (!File.Exists(Settings.PendingCrashPath))
