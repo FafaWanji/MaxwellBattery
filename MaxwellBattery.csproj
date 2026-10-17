@@ -9,7 +9,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <AssemblyName>MaxwellBattery</AssemblyName>
-    <Version>1.0.2</Version>
+    <Version>1.1.0</Version>
   </PropertyGroup>
 
 </Project>

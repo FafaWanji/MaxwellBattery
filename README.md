@@ -5,8 +5,9 @@ A tiny Windows tray app that shows the battery level of the **Audeze Maxwell** h
 - Battery percentage drawn directly as the tray icon (green > 50 %, yellow > 20 %, red ≤ 20 %)
 - Grey `–` when the headset is off or not connected
 - Tooltip with the exact value, left-click to refresh, updates every 60 s
+- Charging indicator: ⚡ next to the number while the headset is connected to the PC by USB-C cable (tooltip says "charging", or "full" at 100 %). Charging from a wall charger is not detected.
 - Low-battery notification at 15 %
-- Optional "Start with Windows" (right-click menu)
+- Optional "Start with Windows" (right-click menu, uses a per-user Task Scheduler logon task)
 - Restarts itself automatically after a crash (crash log: `%LOCALAPPDATA%\MaxwellBattery\crash.log`)
 - No Audeze HQ required
 
@@ -22,6 +23,8 @@ Any Audeze device with vendor ID `0x3329` exposing the vendor HID interface (usa
 ## Download
 
 Grab `MaxwellBattery.exe` from the [latest release](../../releases/latest) and run it. It is self-contained — no .NET install needed. Windows SmartScreen may warn because the exe is unsigned; choose *More info → Run anyway*.
+
+**Updating:** right-click the tray icon → *Exit* first, then run the new exe. If you run it from a different folder, "Start with Windows" follows the new location automatically.
 
 New tray icons are often hidden behind the `^` arrow. Drag the icon onto the taskbar, or enable it under *Settings → Personalization → Taskbar → Other system tray icons*.
 

@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.1.0] - 2026-10-17
+
+### Added
+- Charging indicator. While the headset is connected to the PC by USB-C cable, the tray icon shows a ⚡ next to the number and the tooltip says "(charging)", or "(full, plugged in)" at 100 %. Plugging in or unplugging updates the icon within about 2 seconds. Charging from a wall charger or power bank is not detected (the headset does not report it).
+- No low-battery warning while charging.
+
+### Fixed
+- "Start with Windows" still did not start the app at login on some systems: Windows skipped the startup entry even when it was enabled. Autostart now uses a per-user Task Scheduler logon task (no admin needed). Existing installs are moved over automatically on first start, and the task follows the exe if it is moved.
+- Shutting down or logging off was logged as a crash (and shown as one in dev mode).
+
+### Upgrading
+Right-click the tray icon → **Exit** before running the new version, otherwise the old one keeps running.
+
 ## [1.0.2] - 2026-10-10
 
 ### Fixed
@@ -25,6 +38,7 @@
 - First release: tray icon showing the Audeze Maxwell battery percentage, colour-coded, with tooltip, low-battery notification at 15 % and "Start with Windows" option.
 - Works with the wireless dongle (`3329:4B18`) and USB-C cable (`3329:4B1E`).
 
+[1.1.0]: https://github.com/FafaWanji/MaxwellBattery/releases/tag/v1.1.0
 [1.0.2]: https://github.com/FafaWanji/MaxwellBattery/releases/tag/v1.0.2
 [1.0.1]: https://github.com/FafaWanji/MaxwellBattery/releases/tag/v1.0.1
 [1.0.0]: https://github.com/FafaWanji/MaxwellBattery/releases/tag/v1.0.0
